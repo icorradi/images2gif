@@ -67,6 +67,11 @@ Usefull links
 
 import os, time
 
+def encode(x):
+  if False:
+    return x.encode('utf-8')
+  return x
+
 try:
     import PIL
     from PIL import Image
@@ -220,7 +225,7 @@ class GifWriter:
         return bb
     
     
-    def getGraphicsControlExt(self, duration=0.1, dispose=2,transparent_flag=0,transparency_index=0):
+    def getGraphicsControlExt(self, duration=0.1, dispose=2):
         """ getGraphicsControlExt(duration=0.1, dispose=2)
         
         Graphics Control Extension. A sort of header at the start of
@@ -240,11 +245,11 @@ class GifWriter:
         """
         
         bb = '\x21\xF9\x04'
-        bb += chr(((dispose & 3) << 2)|(transparent_flag & 1))  # low bit 1 == transparency,
+        bb += chr((dispose & 3) << 2)  # low bit 1 == transparency,
         # 2nd bit 1 == user input , next 3 bits, the low two of which are used,
         # are dispose.
         bb += intToBin( int(duration*100) ) # in 100th of seconds
-        bb += chr(transparency_index)  # transparency index
+        bb += '\x00'  # no transparant color
         bb += '\x00'  # end
         return bb
     
@@ -295,7 +300,7 @@ class GifWriter:
             images, xy = self.getSubRectangles(images)
         
         # Done
-        return images, xy, image_info
+        return images, xy
     
     
     def getSubRectangles(self, ims):
@@ -355,7 +360,7 @@ class GifWriter:
         return ims2, xy
     
     
-    def convertImagesToPIL(self, images, dither, nq=0,images_info=None):
+    def convertImagesToPIL(self, images, dither, nq=0):
         """ convertImagesToPIL(images, nq=0)
         
         Convert images to Paletted PIL images, which can then be 
@@ -372,9 +377,7 @@ class GifWriter:
                 if im.ndim==3 and im.shape[2]==3:
                     im = Image.fromarray(im,'RGB')
                 elif im.ndim==3 and im.shape[2]==4:
-                    # im = Image.fromarray(im[:,:,:3],'RGB')
-                    self.transparency = True
-                    im = Image.fromarray(im[:,:,:4],'RGBA')
+                    im = Image.fromarray(im[:,:,:3],'RGB')
                 elif im.ndim==2:
                     im = Image.fromarray(im,'L')
                 images2.append(im)
@@ -387,26 +390,15 @@ class GifWriter:
                 im = im.convert("RGBA") # NQ assumes RGBA
                 nqInstance = NeuQuant(im, int(nq)) # Learn colors from image
                 if dither:
-                    im = im.convert("RGB").quantize(palette=nqInstance.paletteImage(),colors=255)
+                    im = im.convert("RGB").quantize(palette=nqInstance.paletteImage())
                 else:
-                    im = nqInstance.quantize(im,colors=255)  # Use to quantize the image itself
-
-                self.transparency = True # since NQ assumes transparency
-                if self.transparency:
-                    alpha = im.split()[3]
-                    mask = Image.eval(alpha, lambda a: 255 if a <=128 else 0)
-                    im.paste(255,mask=mask)
+                    im = nqInstance.quantize(im)  # Use to quantize the image itself
                 images2.append(im)
         else:
             # Adaptive PIL algorithm
             AD = Image.ADAPTIVE
-            # for index,im in enumerate(images):
-            for i in range(len(images)):
-                im = images[i].convert('RGB').convert('P', palette=AD, dither=dither,colors=255)
-                if self.transparency:
-                    alpha = images[i].split()[3]
-                    mask = Image.eval(alpha, lambda a: 255 if a <=128 else 0)
-                    im.paste(255,mask=mask)
+            for im in images:
+                im = im.convert('P', palette=AD, dither=dither)
                 images2.append(im)
         
         # Done
@@ -423,7 +415,12 @@ class GifWriter:
         # Obtain palette for all images and count each occurance
         palettes, occur = [], []
         for im in images:
-            palettes.append( getheader(im)[1] )
+            #palette = getheader(im)[1]
+            palette = getheader(im)[0][-1]
+            if not palette:
+              #palette = PIL.ImagePalette.ImageColor
+                palette = im.palette.tobytes()
+            palettes.append(palette)
         for palette in palettes:
             occur.append( palettes.count( palette ) )
         
@@ -445,9 +442,9 @@ class GifWriter:
                 appext = self.getAppExt(loops)
         
                 # Write
-                fp.write(header)
+                fp.write(encode(header))
                 fp.write(globalPalette)
-                fp.write(appext)
+                fp.write(encode(appext))
         
                 # Next frame is not the first
                 firstFrame = False
@@ -459,11 +456,8 @@ class GifWriter:
                 data = getdata(im)
                 imdes, data = data[0], data[1:]
 
-                transparent_flag = 0
-                if self.transparency: transparent_flag = 1
-                
                 graphext = self.getGraphicsControlExt(durations[frames],
-                                                        disposes[frames],transparent_flag=transparent_flag,transparency_index=255)
+                                                        disposes[frames])
 
                 # Make image descriptor suitable for using 256 local color palette
                 lid = self.getImageDescriptor(im, xys[frames])
@@ -471,13 +465,13 @@ class GifWriter:
                 # Write local header
                 if (palette != globalPalette) or (disposes[frames] != 2):
                     # Use local color palette
-                    fp.write(graphext)
-                    fp.write(lid) # write suitable image descriptor
+                    fp.write(encode(graphext))
+                    fp.write(encode(lid)) # write suitable image descriptor
                     fp.write(palette) # write local color table
-                    fp.write('\x08') # LZW minimum size code
+                    fp.write(encode('\x08')) # LZW minimum size code
                 else:
                     # Use global color palette
-                    fp.write(graphext)
+                    fp.write(encode(graphext))
                     fp.write(imdes) # write suitable image descriptor
         
                 # Write image data
@@ -487,7 +481,7 @@ class GifWriter:
             # Prepare for next round
             frames = frames + 1
         
-        fp.write(";")  # end gif
+        fp.write(encode(";"))  # end gif
         return frames
     
 
@@ -547,7 +541,6 @@ def writeGif(filename, images, duration=0.1, repeat=True, dither=False,
 
     # Instantiate writer object
     gifWriter = GifWriter()
-    gifWriter.transparency = False # init transparency flag used in GifWriter functions
     
     # Check loops
     if repeat is False:
@@ -568,7 +561,7 @@ def writeGif(filename, images, duration=0.1, repeat=True, dither=False,
     
     # Check subrectangles
     if subRectangles:
-        images, xy, images_info = gifWriter.handleSubRectangles(images, subRectangles)
+        images, xy = gifWriter.handleSubRectangles(images, subRectangles)
         defaultDispose = 1 # Leave image in place
     else:
         # Normal mode
@@ -639,9 +632,8 @@ def readGif(filename, asNumpy=True):
     if not asNumpy:
         images2 = images
         images = []
-        for index,im in enumerate(images2):
-            tmp = PIL.Image.fromarray(im)
-            images.append(tmp)
+        for im in images2:
+            images.append( PIL.Image.fromarray(im) )
     
     # Done
     return images
@@ -830,7 +822,7 @@ class NeuQuant:
             return self.a_s[(alpha, rad)]
         except KeyError:
             length = rad*2-1
-            mid = length/2
+            mid = int(length//2)
             q = np.array(list(range(mid-1,-1,-1))+list(range(-1,mid)))
             a = alpha*(rad*rad - q*q)/(rad*rad)
             a[mid] = 0
@@ -910,7 +902,7 @@ class NeuQuant:
         alpha = self.INITALPHA
         
         i = 0;
-        rad = biasRadius >> self.RADIUSBIASSHIFT
+        rad = biasRadius * 2**self.RADIUSBIASSHIFT
         if rad <= 1:
             rad = 0
         
@@ -958,7 +950,7 @@ class NeuQuant:
             if i%delta == 0:
                 alpha -= alpha / alphadec
                 biasRadius -= biasRadius / self.RADIUSDEC
-                rad = biasRadius >> self.RADIUSBIASSHIFT
+                rad = biasRadius * 2**self.RADIUSBIASSHIFT
                 if rad <= 1:
                     rad = 0
         
